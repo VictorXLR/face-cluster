@@ -10,6 +10,8 @@ import logging
 from PIL import Image
 import cv2
 from tqdm import tqdm
+from collections import Counter, defaultdict
+from sklearn.cluster import AgglomerativeClustering
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -32,8 +34,67 @@ def extract_faces(image_path):
         logger.error(f"Error processing {image_path}: {e}")
         return []
 
-def cluster_faces(image_dir, output_dir, tolerance=0.6):
-    """Cluster images based on faces and organize into directories."""
+def is_blank_or_black(image_path):
+    """Check if an image is blank (all white) or black (all black)."""
+    try:
+        img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return True
+        # Check if all pixels are 0 (black) or 255 (white)
+        if np.all(img == 0) or np.all(img == 255):
+            return True
+        # Optionally, check for very low variance (almost blank)
+        if np.var(img) < 1e-3:
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error reading {image_path}: {e}")
+        return True
+
+def is_blurry(image_path, threshold=30.0):
+    """Check if an image is blurry using Laplacian variance, but keep if faces are detected."""
+    try:
+        img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return False
+        laplacian_var = cv2.Laplacian(img, cv2.CV_64F).var()
+        # If faces are detected, do not consider blurry
+        faces = extract_faces(image_path)
+        if faces:
+            return False
+        return laplacian_var < threshold
+    except Exception as e:
+        logger.error(f"Error checking blur for {image_path}: {e}")
+        return False
+
+def process_bad_images(input_dir):
+    """Delete blank, black, or faceless images and move blurry images to a separate directory."""
+    image_paths = []
+    for ext in ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']:
+        image_paths.extend(list(Path(input_dir).glob(ext)))
+    deleted = 0
+    blurry_dir = Path(input_dir) / "blurry"
+    blurry_dir.mkdir(exist_ok=True)
+    for img_path in tqdm(image_paths, desc="Cleaning images"):
+        if is_blank_or_black(img_path):
+            os.remove(img_path)
+            logger.info(f"Deleted blank/black image: {img_path}")
+            deleted += 1
+            continue
+        if is_blurry(img_path):
+            shutil.move(str(img_path), blurry_dir / img_path.name)
+            logger.info(f"Moved blurry image: {img_path}")
+            continue
+        # Check for faces
+        faces = extract_faces(img_path)
+        if not faces:
+            os.remove(img_path)
+            logger.info(f"Deleted faceless image: {img_path}")
+            deleted += 1
+    logger.info(f"Deleted {deleted} bad images from {input_dir}")
+
+def cluster_faces(image_dir, output_dir, tolerance=0.6, min_cluster_size=3):
+    """Cluster images based on face appearance frequency and organize into directories."""
     image_paths = []
     for ext in ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']:
         image_paths.extend(list(Path(image_dir).glob(ext)))
@@ -63,25 +124,35 @@ def cluster_faces(image_dir, output_dir, tolerance=0.6):
     
     logger.info(f"Found {len(encodings)} faces in {len(set(image_paths_with_faces))} images")
     
-    # Cluster the faces
-    clustering = DBSCAN(eps=tolerance, min_samples=1, metric="euclidean").fit(encodings)
+    # Cluster the faces using AgglomerativeClustering for better control
+    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=tolerance, affinity='euclidean', linkage='ward')
+    labels = clustering.fit_predict(encodings)
+    
+    # Count appearances of each cluster
+    cluster_counts = Counter(labels)
+    
+    # Merge small clusters into a single 'other' cluster
+    merged_labels = []
+    for label in labels:
+        if cluster_counts[label] < min_cluster_size:
+            merged_labels.append(-1)  # -1 for 'other'
+        else:
+            merged_labels.append(label)
     
     # Create output directories
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create a mapping from image paths to clusters
-    image_clusters = {}
-    for i, label in enumerate(clustering.labels_):
+    image_clusters = defaultdict(set)
+    for i, label in enumerate(merged_labels):
         img_path = image_paths_with_faces[i]
-        if img_path not in image_clusters:
-            image_clusters[img_path] = set()
         image_clusters[img_path].add(label)
     
-    # Organize images into cluster directories
     for img_path, clusters in image_clusters.items():
-        # For images with multiple faces, place in each cluster
         for cluster in clusters:
-            cluster_dir = os.path.join(output_dir, f"cluster_{cluster}")
+            if cluster == -1:
+                cluster_dir = os.path.join(output_dir, "other")
+            else:
+                cluster_dir = os.path.join(output_dir, f"cluster_{cluster}")
             os.makedirs(cluster_dir, exist_ok=True)
             
             # Copy image to cluster directory
@@ -111,6 +182,9 @@ def main():
                       help="Tolerance for face matching (lower is stricter, default: 0.6)")
     
     args = parser.parse_args()
+    
+    # Process bad images before clustering
+    process_bad_images(args.input)
     
     success = cluster_faces(args.input, args.output, args.tolerance)
     
