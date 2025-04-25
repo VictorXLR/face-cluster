@@ -16,11 +16,13 @@ from sklearn.cluster import AgglomerativeClustering
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+FACE_DETECTION_MODEL = "VGG-Face" 
+
 def extract_faces(image_path):
     """Extract face embeddings from an image using deepface."""
     try:
         # Get face embeddings using VGG-Face
-        result = DeepFace.represent(img_path=str(image_path), model_name="VGG-Face", enforce_detection=False)
+        result = DeepFace.represent(img_path=str(image_path), model_name=FACE_DETECTION_MODEL, enforce_detection=False)
         
         # Convert to numpy arrays
         encodings = []
@@ -125,7 +127,7 @@ def cluster_faces(image_dir, output_dir, tolerance=0.6, min_cluster_size=3):
     logger.info(f"Found {len(encodings)} faces in {len(set(image_paths_with_faces))} images")
     
     # Cluster the faces using AgglomerativeClustering for better control
-    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=tolerance, affinity='euclidean', linkage='ward')
+    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=tolerance, metric='euclidean', linkage='ward')
     labels = clustering.fit_predict(encodings)
     
     # Count appearances of each cluster

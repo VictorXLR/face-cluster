@@ -5,22 +5,13 @@ This tool clusters images based on faces detected in them and organizes them int
 ## Requirements
 
 - Python 3.6+
-- face_recognition library
+- deepface
 - scikit-learn
 - numpy
 
 ## Installation
 
 ```bash
-pip install -r requirements.txt
-```
-
-Note: The `face_recognition` library requires `dlib` which has some system dependencies. 
-On macOS, you may need to install it with:
-
-```bash
-brew install cmake
-pip install dlib
 pip install -r requirements.txt
 ```
 
@@ -40,7 +31,7 @@ python face_cluster.py --input /path/to/images --output /path/to/output
 
 1. The script scans all images in the input directory
 2. For each image, faces are detected and encoded using facial recognition
-3. The face encodings are clustered using DBSCAN algorithm
+3. The face encodings are clustered using AgglomerativeClustering algorithm
 4. Images are organized into directories based on the clusters
 5. Images with no detected faces are placed in a "no_faces" directory
 
